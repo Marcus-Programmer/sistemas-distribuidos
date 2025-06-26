@@ -1,26 +1,40 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-from transformers import pipeline
 import logging
+from typing import Dict
 
-# Configuração de logging
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+# --- MUDANÇA AQUI ---
+# Importamos as classes específicas para carregar o modelo e o tokenizador
+from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- Carregamento do Modelo de IA ---
-logger.info("[LOG] Iniciando o carregamento do modelo de IA (isso pode demorar)...")
+logger.info("Carregando modelo de IA (Hugging Face) de um diretório local...")
 classificador_sentimento = None
 try:
-    # Usaremos um modelo mais leve (DistilBERT) para evitar problemas de memória.
-    # Ele é mais rápido e consome menos RAM.
+    # Caminho para a pasta do modelo dentro do contêiner
+    model_path = "/app/local_sentiment_model"
+    
+    # --- CORREÇÃO FINAL AQUI ---
+    # Adicionamos 'local_files_only=True' para forçar o uso dos arquivos locais
+    # e impedir qualquer tentativa de conexão com a internet.
+    
+    # 1. Carregamos o Tokenizer diretamente da pasta local
+    tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
+    
+    # 2. Carregamos o Modelo diretamente da pasta local
+    model = AutoModelForSequenceClassification.from_pretrained(model_path, local_files_only=True)
+    
+    # 3. Criamos o pipeline usando os objetos já carregados
     classificador_sentimento = pipeline(
         "sentiment-analysis",
-        model="lxyuan/distilbert-base-multilingual-cased-sentiments-student"
+        model=model,
+        tokenizer=tokenizer
     )
-    logger.info("[LOG] Modelo de IA carregado com SUCESSO!")
+    logger.info("Modelo de Análise de Sentimento carregado com sucesso do diretório local!")
 except Exception as e:
-    logger.error(f"[LOG] FALHA CRÍTICA ao carregar modelo de IA: {e}")
-# ------------------------------------
+    logger.error(f"FALHA CRÍTICA ao carregar modelo local: {e}", exc_info=True)
 
 app = FastAPI()
 
@@ -28,49 +42,42 @@ class TextoParaAnalise(BaseModel):
     texto: str
 
 @app.post("/analise")
-async def analisar_texto(data: TextoParaAnalise):
-    logger.info("--- INÍCIO DA ANÁLISE ---")
-    
+async def analisar_texto(data: TextoParaAnalise) -> Dict:
+    """
+    Recebe um texto e o classifica como 'abuso' ou 'normal' usando o modelo de IA local.
+    """
     if not classificador_sentimento:
-        logger.error("[LOG] Tentativa de análise mas o modelo não está disponível.")
-        return {"erro": "Modelo de IA não está disponível."}
+        logger.error("Tentativa de análise, mas o modelo não está disponível.")
+        raise HTTPException(status_code=503, detail="Serviço de IA de Análise indisponível.")
 
+    logger.info("Classificando texto recebido...")
+    
     try:
-        logger.info("[LOG] ETAPA 1: Recebemos o texto para análise.")
-        texto_recebido = data.texto
-        
-        logger.info("[LOG] ETAPA 2: PREPARANDO PARA CHAMAR O MODELO DE IA.")
-        resultado_analise = classificador_sentimento(texto_recebido)
-        logger.info("[LOG] ETAPA 3: MODELO DE IA EXECUTADO COM SUCESSO.")
-
+        resultado_analise = classificador_sentimento(data.texto)
         primeiro_resultado = resultado_analise[0]
         label = primeiro_resultado['label']
         score = primeiro_resultado['score']
-        logger.info(f"[LOG] ETAPA 4: Resultado do modelo: Label='{label}', Score={score:.4f}")
 
-        # O modelo 'student' usa as labels 'positive', 'negative', 'neutral'.
         if label == "negative":
             classificacao = "abuso"
         else:
             classificacao = "normal"
-        
-        logger.info(f"[LOG] ETAPA 5: Classificação final: '{classificacao}'")
-        
-        resposta = {
+            
+        logger.info(f"Texto classificado como '{classificacao}' com confiança de {score:.2f}.")
+
+        return {
             "classificacao": classificacao,
             "sentimento_detectado": label,
             "confianca_do_modelo": score
         }
-
-        logger.info("[LOG] ETAPA 6: Preparando para enviar a resposta.")
-        logger.info("--- FIM DA ANÁLISE ---")
-        return resposta
-
     except Exception as e:
-        logger.error(f"[LOG] ERRO INESPERADO DURANTE A ANÁLISE: {e}")
-        return {"erro": "Uma falha ocorreu durante o processamento da análise."}
+        logger.error(f"Erro inesperado durante a análise do texto: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Erro interno no processo de análise.")
 
 
 @app.get("/")
 def health_check():
-    return {"status": "Agente analisador (IA) está online"}
+    """
+    Endpoint de verificação de saúde para o Docker.
+    """
+    return {"status": "Agente analisador está online"}
