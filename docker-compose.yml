@@ -5,7 +5,6 @@ services:
     build: ./gateway-api
     ports:
       - "8080:80"
-    # Modificação aqui: o gateway agora espera os serviços estarem 'saudáveis'
     depends_on:
       analisador:
         condition: service_healthy
@@ -20,14 +19,16 @@ services:
       - "8000:8000"
     networks:
       - sistema_distribuido_net
-    # Adição da seção de healthcheck
     healthcheck:
-      # O comando que o Docker executará para verificar a saúde
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
-      interval: 10s       # Verifica a cada 10 segundos
-      timeout: 5s         # Espera 5 segundos por uma resposta
-      retries: 5          # Tenta 5 vezes antes de marcar como 'unhealthy'
-      start_period: 40s   # Não verifica nos primeiros 40s, dando tempo para o modelo carregar
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      # --- CORREÇÃO AQUI ---
+      # Aumentamos o período de inicialização para 180 segundos (3 minutos).
+      # Este tempo é mais que suficiente para carregar o modelo de IA
+      # mesmo em um ambiente com restrições ou com hardware mais lento.
+      start_period: 180s
 
   encaminhador:
     build: ./agente-encaminhador
