@@ -1,9 +1,10 @@
 import requests
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 import logging
 
-# Configuração de logging
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+# --- Configuração do Logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -14,29 +15,27 @@ class TextoParaAnalise(BaseModel):
 
 @app.post("/analisar-e-encaminhar")
 async def analisar_e_encaminhar(data: TextoParaAnalise):
+    """
+    Ponto de entrada do sistema. Recebe um texto, o envia para análise
+    e, se necessário, o encaminha para registro e anonimização.
+    """
     texto_original = data.texto
-    logger.info(f"Gateway recebeu texto para análise: '{texto_original[:50]}...'")
+    logger.info(f"Gateway: Novo texto recebido para orquestração.")
 
     try:
-        # --- CORREÇÃO PRINCIPAL AQUI ---
-        # A URL agora aponta para o endpoint /analise do serviço 'analisador'
-        # O Docker resolve o nome 'analisador' para o IP correto na rede interna.
+        # 1. Chamar o Agente Analisador
+        logger.info("Gateway: Comunicando com o Agente Analisador...")
         url_analisador = "http://analisador:8000/analise"
-        logger.info(f"Encaminhando para o Agente Analisador em: {url_analisador}")
-        
         response_analisador = requests.post(url_analisador, json={"texto": texto_original})
-        
-        # Verifica se a requisição ao analisador foi bem sucedida (código 2xx)
-        response_analisador.raise_for_status()
+        response_analisador.raise_for_status()  # Lança exceção para erros HTTP (4xx ou 5xx)
         
         resultado_analise = response_analisador.json()
         classificacao_ia = resultado_analise.get("classificacao")
-        
-        logger.info(f"Gateway recebeu a classificação: '{classificacao_ia}'")
+        logger.info(f"Gateway: Análise recebida com a classificação '{classificacao_ia}'.")
 
-        # Se a IA classificou como abuso, encaminha para o agente de denúncias
+        # 2. Se for abuso, chamar o Agente Encaminhador
         if classificacao_ia == "abuso":
-            logger.info("Classificado como 'abuso'. Encaminhando para o Agente Encaminhador.")
+            logger.info("Gateway: Comunicando com o Agente Encaminhador...")
             url_encaminhador = "http://encaminhador:8001/registrar-denuncia"
             
             payload_denuncia = {
@@ -48,18 +47,23 @@ async def analisar_e_encaminhar(data: TextoParaAnalise):
             response_encaminhador = requests.post(url_encaminhador, json=payload_denuncia)
             response_encaminhador.raise_for_status()
             
+            logger.info("Gateway: Denúncia registrada e anonimizada com sucesso.")
             return {"status": "Denúncia encaminhada com sucesso", "classificacao_ia": classificacao_ia}
+        
         else:
-            logger.info("Classificado como 'normal'. Nenhuma ação adicional.")
+            logger.info("Gateway: Texto considerado normal. Processo finalizado.")
             return {"status": "Análise concluída, texto considerado normal.", "classificacao_ia": classificacao_ia}
 
     except requests.exceptions.RequestException as e:
-        logger.error(f"Erro de comunicação entre serviços: {e}")
-        raise HTTPException(status_code=503, detail=f"Erro de comunicação com um serviço interno: {e}")
+        logger.error(f"Gateway: Erro de comunicação com um serviço interno: {e}")
+        raise HTTPException(status_code=503, detail=f"Serviço interno indisponível: {e}")
     except Exception as e:
-        logger.error(f"Ocorreu um erro inesperado no gateway: {e}")
+        logger.error(f"Gateway: Ocorreu um erro inesperado: {e}")
         raise HTTPException(status_code=500, detail="Ocorreu um erro inesperado no gateway.")
 
 @app.get("/")
 def health_check():
+    """
+    Endpoint de verificação de saúde para o Docker.
+    """
     return {"status": "Gateway API está online"}
